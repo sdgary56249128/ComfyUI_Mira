@@ -29,7 +29,9 @@ def parse_content(content: str) -> list:
         if len(parts) > 1:
             param_count = len(parts) - 1
             float_vals = [float(val) for val in parts[1:]]
-            if param_count == 2:
+            if param_count == 1:
+                values = [float_vals[0]] * 4
+            elif param_count == 2:
                 values = [float_vals[0], float_vals[1], float_vals[0], float_vals[1]]
             elif param_count >= 1:
                 for i, val in enumerate(float_vals[:4]):
@@ -41,6 +43,19 @@ def parse_content(content: str) -> list:
 def remove_brackets(input_text: str) -> str:
     pattern = r'<lora:[^>]*>'
     return re.sub(pattern, '', input_text).strip()
+
+def resolve_lora_path(lora_name: str):
+    lora_path = comfy_paths.get_full_path("loras", lora_name)
+    if lora_path is not None:
+        return lora_path
+
+    # LoRA Manager syntax omits the extension, and its legacy format also omits the subfolder
+    target = lora_name.replace('\\', '/')
+    for name in comfy_paths.get_filename_list("loras"):
+        stem = os.path.splitext(name)[0].replace('\\', '/')
+        if stem == target or stem.rsplit('/', 1)[-1] == target:
+            return comfy_paths.get_full_path("loras", name)
+    return None
 
 def process_text(input_text: str) -> tuple[list, str]:
     bracket_contents = extract_bracket_content(input_text)
@@ -213,7 +228,7 @@ class LoRAfromText(IO.ComfyNode):
             lora_name, s1, c1, s2, c2 = lora_data[0], lora_data[1], lora_data[2], lora_data[3], lora_data[4]
             #print(f'Mira: [LoRALoaderWithNameStacker] lora_data >> {lora_name} {s1} {c1} {s2} {c2}')
             
-            lora_path = comfy_paths.get_full_path("loras", lora_name)
+            lora_path = resolve_lora_path(lora_name)
             if lora_path is None:
                 logger.error(f'Mira: [ERROR][LoRALoaderWithNameStacker] Load LoRA failed lora_path >> {lora_path}')        
             else:
