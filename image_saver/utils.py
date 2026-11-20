@@ -59,14 +59,24 @@ def _read_cached_sha256(hash_file: str, file_stat: os.stat_result) -> str | None
     return None
 
 
+# Hashes already worked out in this ComfyUI run, by model path → (stamp, hash). A model in a read-only folder (e.g. a
+# NAS shared read-only) can't keep its .sha256 sidecar, so without this it was read in full and hashed again for every
+# saved image. A changed model (other mtime or size) is hashed again.
+_memory_cache: dict[str, tuple[str, str]] = {}
+_write_failed: set[str] = set()   # sidecars that could not be written: logged once, not on every image
+
+
 def _write_cached_sha256(hash_file: str, digest: str, file_stat: os.stat_result) -> None:
     temporary = hash_file + ".tmp"
     try:
         with open(temporary, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"{digest}\n{_cache_stamp(file_stat)}\n")
         os.replace(temporary, hash_file)
+        _write_failed.discard(hash_file)
     except OSError as e:
-        logger.error(f"ComfyUI-Image-Saver: Error writing hash to {hash_file}: {e}")
+        if hash_file not in _write_failed:
+            _write_failed.add(hash_file)
+            logger.error(f"ComfyUI-Image-Saver: Error writing hash to {hash_file}: {e} (kept in memory for this run)")
         try:
             os.remove(temporary)
         except OSError:
@@ -87,13 +97,17 @@ def _compute_sha256(file_path: str, file_size: int) -> str:
 
 def get_sha256(file_path: str):
     file_stat = os.stat(file_path)
-    hash_file = os.path.splitext(file_path)[0] + ".sha256"
-    cached = _read_cached_sha256(hash_file, file_stat)
-    if cached is not None:
-        return cached
+    stamp = _cache_stamp(file_stat)
+    remembered = _memory_cache.get(file_path)
+    if remembered is not None and remembered[0] == stamp:
+        return remembered[1]
 
-    digest = _compute_sha256(file_path, file_stat.st_size)
-    _write_cached_sha256(hash_file, digest, file_stat)
+    hash_file = os.path.splitext(file_path)[0] + ".sha256"
+    digest = _read_cached_sha256(hash_file, file_stat)
+    if digest is None:
+        digest = _compute_sha256(file_path, file_stat.st_size)
+        _write_cached_sha256(hash_file, digest, file_stat)
+    _memory_cache[file_path] = (stamp, digest)
     return digest
 
 
