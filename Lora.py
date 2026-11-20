@@ -5,6 +5,7 @@ from .v3schema import node
 
 import os
 import re
+import unicodedata
 import comfy.utils
 import folder_paths as comfy_paths
 
@@ -49,13 +50,21 @@ def resolve_lora_path(lora_name: str):
     if lora_path is not None:
         return lora_path
 
-    # LoRA Manager syntax omits the extension, and its legacy format also omits the subfolder
-    target = lora_name.replace('\\', '/')
-    for name in comfy_paths.get_filename_list("loras"):
-        stem = os.path.splitext(name)[0].replace('\\', '/')
-        if stem == target or stem.rsplit('/', 1)[-1] == target:
+    # LoRA Manager syntax omits the extension, and its legacy format also omits the subfolder. uq-local: a LoRA
+    # moved to another folder keeps its file name, but a prompt from before names the old folder (and the extension,
+    # so the file-name match below never matched): find it by file name when exactly one LoRA has it. Names are
+    # compared in NFC (macOS writes some characters as two code points, the NAS / Windows as one).
+    def plain(name):
+        name = unicodedata.normalize("NFC", name.replace('\\', '/'))
+        return os.path.splitext(name)[0] if name.lower().endswith(('.safetensors', '.ckpt', '.pt', '.pth', '.bin')) else name
+    target = plain(lora_name)
+    names = comfy_paths.get_filename_list("loras")
+    for name in names:
+        if plain(name) == target:
             return comfy_paths.get_full_path("loras", name)
-    return None
+    base = target.rsplit('/', 1)[-1]
+    found = [name for name in names if plain(name).rsplit('/', 1)[-1] == base]
+    return comfy_paths.get_full_path("loras", found[0]) if len(found) == 1 else None
 
 def process_text(input_text: str) -> tuple[list, str]:
     bracket_contents = extract_bracket_content(input_text)
