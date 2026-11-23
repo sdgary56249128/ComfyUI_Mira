@@ -1,5 +1,6 @@
 import logging
 logger = logging.getLogger("comfy")
+import errno
 import os
 from pathlib import Path
 import hashlib
@@ -64,9 +65,15 @@ def _read_cached_sha256(hash_file: str, file_stat: os.stat_result) -> str | None
 # saved image. A changed model (other mtime or size) is hashed again.
 _memory_cache: dict[str, tuple[str, str]] = {}
 _write_failed: set[str] = set()   # sidecars that could not be written: logged once, not on every image
+# Folders that refused a write because they are read-only (a NAS share): not tried again in this run, and that is
+# expected there, so it is one info line per folder instead of an error for every model.
+_read_only_dirs: set[str] = set()
 
 
 def _write_cached_sha256(hash_file: str, digest: str, file_stat: os.stat_result) -> None:
+    folder = os.path.dirname(hash_file)
+    if folder in _read_only_dirs:
+        return
     temporary = hash_file + ".tmp"
     try:
         with open(temporary, "w", encoding="utf-8", newline="\n") as f:
@@ -74,7 +81,10 @@ def _write_cached_sha256(hash_file: str, digest: str, file_stat: os.stat_result)
         os.replace(temporary, hash_file)
         _write_failed.discard(hash_file)
     except OSError as e:
-        if hash_file not in _write_failed:
+        if isinstance(e, PermissionError) or e.errno == errno.EROFS:
+            _read_only_dirs.add(folder)
+            logger.info(f"ComfyUI-Image-Saver: '{folder}' is read-only, model hashes are kept in memory for this run")
+        elif hash_file not in _write_failed:
             _write_failed.add(hash_file)
             logger.error(f"ComfyUI-Image-Saver: Error writing hash to {hash_file}: {e} (kept in memory for this run)")
         try:
